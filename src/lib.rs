@@ -62,9 +62,10 @@ impl KanataExtension {
             .ok_or_else(|| format!("no asset found matching {asset_name:?}"))?;
 
         let version_dir = format!("kanata-lsp-{}", release.version);
-        let binary_path = format!("{version_dir}/kanata-lsp{}", 
+        let binary_name = format!("kanata-lsp{}", 
             if platform == zed::Os::Windows { ".exe" } else { "" }
         );
+        let binary_path = format!("{version_dir}/{binary_name}");
 
         if !fs::metadata(&binary_path).map(|stat| stat.is_file()).unwrap_or(false) {
             zed::set_language_server_installation_status(
@@ -72,9 +73,14 @@ impl KanataExtension {
                 &zed::LanguageServerInstallationStatus::Downloading,
             );
 
+            // Create version directory
+            fs::create_dir_all(&version_dir)
+                .map_err(|e| format!("failed to create directory: {e}"))?;
+
+            // Download directly to the binary path
             zed::download_file(
                 &asset.download_url,
-                &version_dir,
+                &binary_path,
                 zed::DownloadedFileType::Uncompressed,
             )
             .map_err(|e| format!("failed to download file: {e}"))?;
