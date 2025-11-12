@@ -28,6 +28,9 @@ jobs:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             artifact_name: kanata-lsp-windows-x86_64.exe
+          - os: windows-latest
+            target: aarch64-pc-windows-msvc
+            artifact_name: kanata-lsp-windows-aarch64.exe
 
     runs-on: ${{ matrix.os }}
     

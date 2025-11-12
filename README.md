@@ -8,8 +8,11 @@ A Zed editor extension that provides syntax highlighting for
 - 🎨 **Syntax highlighting** for `.kbd` files via [tree-sitter-kanata](https://github.com/postsolar/tree-sitter-kanata)
 - 🔄 **Auto-indentation** for better code formatting
 - 🔗 **Bracket matching** to help with nested configurations
-- 💬 **Comment support** with line comments (`//`)
-- 🔍 **Error diagnostics** via LSP server to catch configuration issues as you type
+- 💬 **Comment support** with line comments (`;;`)
+- 🔍 **Real-time error diagnostics** via custom Rust-based LSP server
+  - Automatically downloaded and installed on first use
+  - Available for macOS (x86_64, ARM64), Linux (x86_64, ARM64), and Windows (x86_64, ARM64)
+  - Powered by the official [kanata-parser](https://github.com/jtroo/kanata)
 
 ## 📦 Installation
 
@@ -34,21 +37,12 @@ git clone https://github.com/willpuckett/zed-kanata.git
 cd zed-kanata
 ```
 
-2. Build and install the LSP server (for diagnostics):
-
-```bash
-cd kanata-lsp
-cargo build --release
-sudo cp target/release/kanata-lsp /usr/local/bin/
-cd ..
-```
-
-3. In Zed:
+2. In Zed:
    - Open the command palette (`Cmd+Shift+P` / `Ctrl+Shift+P`)
    - Run "zed: install dev extension"
    - Select the `zed-kanata` directory
 
-The extension will automatically compile and install.
+The extension will automatically compile and install. The LSP server binary will be automatically downloaded from GitHub releases on first use.
 
 ## 🚀 Usage
 
@@ -120,7 +114,7 @@ MIT License
 
 - [ ] Publish to Zed extension registry
 - [x] Language server integration for diagnostics
-- [ ] Completions and hover information
+- [x] Completions and hover information
 - [ ] Code snippets for common Kanata patterns
 - [ ] Formatting support for aligning deflayer blocks
 - [ ] Go-to-definition for aliases and layers

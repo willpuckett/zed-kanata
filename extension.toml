@@ -1,6 +1,6 @@
 id = "kanata"
 name = "Kanata"
-description = "Kanata keyboard configuration language support."
+description = "Kanata keyboard configuration language support"
 version = "0.1.0"
 schema_version = 1
 authors = ["Will Puckett <willpuckett@gmail.com>"]
