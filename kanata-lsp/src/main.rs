@@ -99,7 +99,7 @@ impl KanataLanguageServer {
                 }
             }
             // Look for the end marker
-            if (line.contains("├─▶") || line.contains("╰──")) {
+            if line.contains("├─▶") || line.contains("╰──") {
                 if let Some(num_str) = line.split('│').next() {
                     if let Ok(num) = num_str.trim().parse::<u32>() {
                         end_line = Some(num.saturating_sub(1)); // Convert to 0-based
