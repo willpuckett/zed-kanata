@@ -81,7 +81,7 @@
   • kprt kp7 kp8 kp9 • • vold mute volu • •
   • kp0 kp4 kp5 kp6 • • • left down up right •
   • kp. kp1 kp2 kp3 • • • • home pgdn pgup end
-    bspc • • • left up down right
+    bspc • • • left up down right 
 )
 
 (deflayer fun

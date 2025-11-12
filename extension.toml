@@ -9,3 +9,7 @@ repository = "https://github.com/willpuckett/zed-kanata"
 [grammars.kanata]
 repository = "https://github.com/postsolar/tree-sitter-kanata"
 commit = "af53b4c35d6faa3b4ba7c317fb795a6eb679b42a"
+
+[language_servers.kanata-lsp]
+name = "Kanata Language Server"
+languages = ["Kanata"]

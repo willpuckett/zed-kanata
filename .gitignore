@@ -1,0 +1,12 @@
+#
+# zed-kanata
+#
+
+*.wasm
+/grammars
+
+#
+# Rust
+#
+
+target/
