@@ -5,10 +5,23 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use std::collections::HashMap;
 
+#[derive(Debug, Clone)]
+struct Definition {
+    uri: Url,
+    range: Range,
+}
+
+#[derive(Debug)]
+struct DocumentSymbols {
+    aliases: HashMap<String, Definition>,
+    layers: HashMap<String, Definition>,
+}
+
 #[derive(Debug)]
 struct KanataLanguageServer {
     client: Client,
     diagnostics_cache: Arc<RwLock<HashMap<Url, Vec<Diagnostic>>>>,
+    symbols_cache: Arc<RwLock<HashMap<Url, DocumentSymbols>>>,
 }
 
 #[tower_lsp::async_trait]
@@ -31,6 +44,7 @@ impl LanguageServer for KanataLanguageServer {
                         work_done_progress_options: WorkDoneProgressOptions::default(),
                     },
                 )),
+                definition_provider: Some(OneOf::Left(true)),
                 ..ServerCapabilities::default()
             },
         })
@@ -58,6 +72,58 @@ impl LanguageServer for KanataLanguageServer {
         }
     }
 
+    async fn goto_definition(
+        &self,
+        params: GotoDefinitionParams,
+    ) -> Result<Option<GotoDefinitionResponse>> {
+        let uri = &params.text_document_position_params.text_document.uri;
+        let position = params.text_document_position_params.position;
+        
+        // Get the document text - we'll need to read it from the file
+        let file_path = uri.to_file_path().ok();
+        if file_path.is_none() {
+            return Ok(None);
+        }
+        
+        let text = match std::fs::read_to_string(file_path.unwrap()) {
+            Ok(t) => t,
+            Err(_) => return Ok(None),
+        };
+        
+        // Get the word at the cursor position
+        let word = Self::get_word_at_position(&text, position);
+        if word.is_empty() {
+            return Ok(None);
+        }
+        
+        // Check if it's an alias reference (starts with @)
+        if word.starts_with('@') {
+            let alias_name = &word[1..]; // Remove the @
+            let symbols = self.symbols_cache.read().await;
+            if let Some(doc_symbols) = symbols.get(uri) {
+                if let Some(def) = doc_symbols.aliases.get(alias_name) {
+                    return Ok(Some(GotoDefinitionResponse::Scalar(Location {
+                        uri: def.uri.clone(),
+                        range: def.range,
+                    })));
+                }
+            }
+        } else {
+            // Check if it's a layer reference
+            let symbols = self.symbols_cache.read().await;
+            if let Some(doc_symbols) = symbols.get(uri) {
+                if let Some(def) = doc_symbols.layers.get(&word) {
+                    return Ok(Some(GotoDefinitionResponse::Scalar(Location {
+                        uri: def.uri.clone(),
+                        range: def.range,
+                    })));
+                }
+            }
+        }
+        
+        Ok(None)
+    }
+
     async fn diagnostic(
         &self,
         params: DocumentDiagnosticParams,
@@ -83,6 +149,129 @@ impl LanguageServer for KanataLanguageServer {
 }
 
 impl KanataLanguageServer {
+    fn get_word_at_position(text: &str, position: Position) -> String {
+        let lines: Vec<&str> = text.lines().collect();
+        if position.line as usize >= lines.len() {
+            return String::new();
+        }
+        
+        let line = lines[position.line as usize];
+        let char_pos = position.character as usize;
+        
+        if char_pos >= line.len() {
+            return String::new();
+        }
+        
+        // Find the start of the word (including @ for aliases)
+        let mut start = char_pos;
+        while start > 0 {
+            let c = line.chars().nth(start - 1).unwrap();
+            if c.is_alphanumeric() || c == '_' || c == '-' || c == '@' {
+                start -= 1;
+            } else {
+                break;
+            }
+        }
+        
+        // Find the end of the word
+        let mut end = char_pos;
+        while end < line.len() {
+            let c = line.chars().nth(end).unwrap();
+            if c.is_alphanumeric() || c == '_' || c == '-' {
+                end += 1;
+            } else {
+                break;
+            }
+        }
+        
+        line[start..end].to_string()
+    }
+    
+    fn extract_symbols(uri: &Url, text: &str) -> DocumentSymbols {
+        let mut aliases = HashMap::new();
+        let mut layers = HashMap::new();
+        
+        let lines: Vec<&str> = text.lines().collect();
+        
+        for (line_num, line) in lines.iter().enumerate() {
+            let trimmed = line.trim();
+            
+            // Look for defalias definitions: (defalias name ...)
+            if trimmed.starts_with("(defalias") {
+                // Parse simple s-expression to extract alias names
+                let content = trimmed.trim_start_matches("(defalias").trim();
+                let mut depth = 0;
+                let mut current_word = String::new();
+                let mut in_string = false;
+                let mut is_first_word = true;
+                
+                for (_char_idx, c) in content.chars().enumerate() {
+                    match c {
+                        '"' => in_string = !in_string,
+                        '(' if !in_string => depth += 1,
+                        ')' if !in_string => {
+                            if depth > 0 {
+                                depth -= 1;
+                            } else {
+                                break;
+                            }
+                        }
+                        ' ' | '\t' | '\n' if !in_string && depth == 0 => {
+                            if !current_word.is_empty() && is_first_word {
+                                // This is an alias name
+                                let start_char = line.find(&current_word).unwrap_or(0);
+                                aliases.insert(current_word.clone(), Definition {
+                                    uri: uri.clone(),
+                                    range: Range {
+                                        start: Position {
+                                            line: line_num as u32,
+                                            character: start_char as u32,
+                                        },
+                                        end: Position {
+                                            line: line_num as u32,
+                                            character: (start_char + current_word.len()) as u32,
+                                        },
+                                    },
+                                });
+                                is_first_word = false;
+                            }
+                            current_word.clear();
+                        }
+                        _ if !in_string || depth == 0 => current_word.push(c),
+                        _ => {}
+                    }
+                }
+            }
+            
+            // Look for deflayer definitions: (deflayer name ...)
+            if trimmed.starts_with("(deflayer") {
+                let content = trimmed.trim_start_matches("(deflayer").trim();
+                // Get first word as layer name
+                if let Some(end_idx) = content.find(|c: char| c.is_whitespace() || c == ')') {
+                    let layer_name = &content[..end_idx];
+                    if !layer_name.is_empty() {
+                        let start_char = line.find(layer_name).unwrap_or(0);
+                        layers.insert(layer_name.to_string(), Definition {
+                            uri: uri.clone(),
+                            range: Range {
+                                start: Position {
+                                    line: line_num as u32,
+                                    character: start_char as u32,
+                                },
+                                end: Position {
+                                    line: line_num as u32,
+                                    character: (start_char + layer_name.len()) as u32,
+                                },
+                            },
+                        });
+                    }
+                }
+            }
+        }
+        
+        DocumentSymbols { aliases, layers }
+    }
+    
     fn extract_line_info(error_msg: &str) -> (u32, u32, u32) {
         // Try to extract line number from the visual range markers first
         // Format: "79 │ ╭─▶" to "85 │ ├─▶"
@@ -135,6 +324,10 @@ impl KanataLanguageServer {
     }
 
     async fn validate_document(&self, uri: &Url, text: &str) {
+        // Extract symbols from the document
+        let symbols = Self::extract_symbols(uri, text);
+        self.symbols_cache.write().await.insert(uri.clone(), symbols);
+        
         // Write text to a temporary file to parse it
         let temp_file = std::env::temp_dir().join("kanata-temp.kbd");
         let diagnostics = match std::fs::write(&temp_file, text) {
@@ -245,6 +438,7 @@ async fn main() {
     let (service, socket) = LspService::new(|client| KanataLanguageServer { 
         client,
         diagnostics_cache: Arc::new(RwLock::new(HashMap::new())),
+        symbols_cache: Arc::new(RwLock::new(HashMap::new())),
     });
     
     Server::new(stdin, stdout, socket).serve(service).await;
