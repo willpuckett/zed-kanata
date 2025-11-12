@@ -1,7 +1,7 @@
 name = "Kanata"
 grammar = "kanata"
 path_suffixes = ["kbd"]
-line_comments = ["; ", ";; "]
+line_comments = [";; "]
 autoclose_before = ",]}"
 brackets = [
   { start = "(", end = ")", close = true, newline = true },
