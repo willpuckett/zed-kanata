@@ -5,13 +5,15 @@ A Zed editor extension that provides syntax highlighting for
 
 ## ✨ Features
 
-- 🎨 **Syntax highlighting** for `.kbd` files via [tree-sitter-kanata](https://github.com/postsolar/tree-sitter-kanata)
+- 🎨 **Syntax highlighting** for `.kbd` files via
+  [tree-sitter-kanata](https://github.com/postsolar/tree-sitter-kanata)
 - 🔄 **Auto-indentation** for better code formatting
 - 🔗 **Bracket matching** to help with nested configurations
 - 💬 **Comment support** with line comments (`;;`)
 - 🔍 **Real-time error diagnostics** via custom Rust-based LSP server
   - Automatically downloaded and installed on first use
-  - Available for macOS (x86_64, ARM64), Linux (x86_64, ARM64), and Windows (x86_64, ARM64)
+  - Available for macOS (x86_64, ARM64), Linux (x86_64, ARM64), and Windows
+    (x86_64, ARM64)
   - Powered by the official [kanata-parser](https://github.com/jtroo/kanata)
 
 ## 📦 Installation
@@ -42,7 +44,8 @@ cd zed-kanata
    - Run "zed: install dev extension"
    - Select the `zed-kanata` directory
 
-The extension will automatically compile and install. The LSP server binary will be automatically downloaded from GitHub releases on first use.
+The extension will automatically compile and install. The LSP server binary will
+be automatically downloaded from GitHub releases on first use.
 
 ## 🚀 Usage
 
