@@ -1,0 +1,185 @@
+;; Home row mods QWERTY example with more complexity.
+;; Some of the changes from the basic example:
+;; - when a home row mod activates tap, the home row mods are disabled
+;;   while continuing to type rapidly
+;; - tap-hold-release helps make the hold action more responsive
+;; - pressing another key on the same half of the keyboard
+;;   as the home row mod will activate an early tap action
+
+(defcfg
+  process-unmapped-keys yes
+  block-unmapped-keys yes
+  macos-dev-names-include (
+    "Apple Internal Keyboard / Trackpad"
+  )
+    concurrent-tap-hold yes
+    chords-v2-min-idle 20
+)
+(defsrc
+  1 2 3 4 5 6 7 8 9 0 - =
+  q w e r t y u i o p [ ]
+  caps a s d f g h j k l ; ' \
+  lsft ` z x c v b n m , . / rsft
+    lmet spc rmet ralt left up down right
+)
+(defvar
+  ;; Note: consider using different time values for your different fingers.
+  ;; For example, your pinkies might be slower to release keys and index
+  ;; fingers faster.
+  tap-time 200
+  tap-time-pinky 250
+  hold-time 150
+  hold-time-pinky 200
+  short-chord 25
+  long-chord 50
+
+  left-hand-keys (
+    1 2 3 4 5 6
+    q w e r t y
+    caps a s d f g
+    lsft ` z x c v b
+    lmet spc
+  )
+  right-hand-keys (
+    7 8 9 0 - =
+    u i o p [ ]
+    h j k l ; ' \
+    n m , . / rsft
+    rmet ralt
+  )
+)
+
+;; (deflayer contains-no-ops
+  ;; XX ✗ ∅ •)
+
+(deflayer base
+  • 1 2 3 4 5 - 6 7 8 9 0
+  • b f d l • • p o u y •
+  • @c @s @t @r • • •  @n @a @i @h k
+  • v g m w • • • • . , ' k
+    @bfun @snn e ret left up down right
+)
+
+(deflayer nomods
+  • 1 2 3 4 5 - 6 7 8 9 0
+  • b f d l • • p o u y •
+  • c s t r • • •  n  a  i  h k
+  • v g m w • • • • . , ' k
+    bspc spc e ret left up down right
+)
+
+(deflayer usd
+  • 0 9 8 7 6 • 5 4 3 2 1
+  • y u o p • • l d f b •
+  • @h @i @a @n • • • @r @t @s @c •
+  • @ss ' , . • • • • w m g v
+    ret e @snn @bfun left up down right
+)
+
+(deflayer nn
+  • • • • • • • • • • • •
+  • kprt kp7 kp8 kp9 • • vold mute volu • •
+  • kp0 kp4 kp5 kp6 • • • left down up right •
+  • kp. kp1 kp2 kp3 • • • • home pgdn pgup end
+    bspc • • • left up down right
+)
+
+(deflayer fun
+  • • • • • • • • • • • •
+  • f12 f7 f8 f9 • • f19 f20 f21 f24 •
+  • f11 f4 f5 f6 • • • f16 f17 f18 f23 •
+  • f10 f1 f2 f3 • • • • f13 f14 f15 f22
+    • • • • left up down right
+)
+
+(deffakekeys
+  to-base (layer-switch base)
+)
+(defalias
+  tap (multi
+    (layer-switch nomods)
+    (on-idle-fakekey to-base tap 20)
+  )
+
+  ss (one-shot 2000 lsft)
+  cw (caps-word-toggle 5000)
+  sss (switch
+    ((key-history spc 1)) @ss break
+    () spc break
+  )
+  ;; sse (switch
+  ;;   ((key-history spc 1)) @ss break
+  ;;   () ret break
+  ;; )
+  ;; ssc (switch
+  ;;   ((not (or (key-history spc 1) (key-history bspc 1)))) , break
+  ;;   () @ss break
+  ;; )
+
+  snn (tap-hold $tap-time $hold-time @sss (layer-while-held nn)) ;; tap: space hold: numbers layer
+  bfun (tap-hold $tap-time $hold-time bspc (layer-while-held fun)) ;; tap: bspc hold: function layer
+  usd (one-shot 2000 (layer-while-held usd))
+
+
+  c (tap-hold-release-keys $tap-time-pinky $hold-time-pinky (multi c @tap) lctl $left-hand-keys)
+  s (tap-hold-release-keys $tap-time-pinky $hold-time-pinky (multi s @tap) lalt $left-hand-keys)
+  t (tap-hold-release-keys $tap-time-pinky $hold-time-pinky (multi t @tap) lmet $left-hand-keys)
+  r (tap-hold-release-keys $tap-time-pinky $hold-time-pinky (multi r @tap) lsft $left-hand-keys)
+  n (tap-hold-release-keys $tap-time-pinky $hold-time-pinky (multi n @tap) rsft $right-hand-keys)
+  a (tap-hold-release-keys $tap-time-pinky $hold-time-pinky (multi a @tap) rmet $right-hand-keys)
+  i (tap-hold-release-keys $tap-time-pinky $hold-time-pinky (multi i @tap) ralt $right-hand-keys)
+  h (tap-hold-release-keys $tap-time-pinky $hold-time-pinky (multi h @tap) lctl $right-hand-keys)
+)
+
+(defchordsv2
+  ;; v2 chords are defined wit defsrc key positions
+  ;; 1 2 3 4 5 6 7 8 9 0 - =
+  ;; q w e r t y u i o p [ ]
+  ;; caps a s d f g h j k l ; ' \
+  ;; lsft ` z x c v b n m , . / rsft
+  ;;   lmet spc rmet ralt
+    (f k     ) @cw $short-chord all-released (nn fun)
+    ( s    f ) @ss $short-chord all-released (nn fun)
+    (k    ;  ) @ss $short-chord all-released (nn fun)
+    (a     ' ) caps $short-chord all-released (nn fun)
+
+    (s d f   ) @usd $short-chord all-released (nn fun)
+    (k l ;   ) @usd $short-chord all-released (nn fun)
+
+    (w e     ) lsgt $short-chord all-released (nn fun)
+    (  e r   ) x $short-chord all-released (nn fun)
+    (    r t ) = $short-chord all-released (nn fun)
+    (  e r t ) esc $short-chord all-released (nn fun)
+    ( w e r  ) esc $short-chord all-released (nn fun)
+    (  s d   ) esc $short-chord all-released (nn fun)
+
+    (a s     ) tab $short-chord all-released (nn fun)
+
+    (; '     ) ; $short-chord all-released (nn fun)
+
+    (` z     ) q $short-chord all-released (nn fun)
+    (  z x   ) j $short-chord all-released (nn fun)
+    (    x c ) - $short-chord all-released (nn fun)
+    (`      c) z $short-chord all-released (nn fun)
+
+    (i o     ) \ $short-chord all-released (nn fun)
+    (    p [ ) k $short-chord all-released (nn fun)
+    (  o p   ) [ $short-chord all-released (nn fun)
+    (i     [ ) ] $short-chord all-released (nn fun)
+    (i   p   ) S-0 $short-chord all-released (nn fun)
+    ( o    [ ) S-9 $short-chord all-released (nn fun)
+    ;; (i o p [ ) (macro = S-.) $short-chord all-released (nn fun)
+
+    (, .     ) / $short-chord all-released (nn fun)
+    (  . /   ) S-[ $short-chord all-released (nn fun)
+    (,   rsft) S-] $short-chord all-released (nn fun)
+    (, /     ) S-. $short-chord all-released (nn fun)
+    ( .  rsft) S-, $short-chord all-released (nn fun)
+    (. , / rsft) (macro = S-.) $short-chord all-released (nn fun)
+
+
+    (a `) M-z $long-chord all-released (nn fun)
+    (z s) M-x $long-chord all-released (nn fun)
+    (x d) M-c $long-chord all-released (nn fun)
+    (c f) M-v $long-chord all-released (nn fun)
+)
