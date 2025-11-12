@@ -1,6 +1,6 @@
 [package]
 name = "kanata-lsp"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 
 [[bin]]
@@ -12,3 +12,4 @@ tower-lsp = "0.20"
 tokio = { version = "1", features = ["full"] }
 kanata-parser = "0.1103"
 serde_json = "1.0"
+unicode-segmentation = "1.12"

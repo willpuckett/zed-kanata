@@ -1,0 +1,11 @@
+(defsrc
+  a b c
+)
+
+(defalias
+  myalias (layer-switch base)
+)
+
+(deflayer base
+  @myalias b c
+)

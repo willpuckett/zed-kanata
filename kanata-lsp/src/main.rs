@@ -4,6 +4,7 @@ use tower_lsp::{Client, LanguageServer, LspService, Server};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use std::collections::HashMap;
+use unicode_segmentation::UnicodeSegmentation;
 
 #[derive(Debug, Clone)]
 struct Definition {
@@ -45,6 +46,7 @@ impl LanguageServer for KanataLanguageServer {
                     },
                 )),
                 definition_provider: Some(OneOf::Left(true)),
+                document_formatting_provider: Some(OneOf::Left(true)),
                 ..ServerCapabilities::default()
             },
         })
@@ -85,7 +87,7 @@ impl LanguageServer for KanataLanguageServer {
             return Ok(None);
         }
         
-        let text = match std::fs::read_to_string(file_path.unwrap()) {
+        let text = match std::fs::read_to_string(file_path.as_ref().unwrap()) {
             Ok(t) => t,
             Err(_) => return Ok(None),
         };
@@ -124,6 +126,41 @@ impl LanguageServer for KanataLanguageServer {
         Ok(None)
     }
 
+    async fn formatting(&self, params: DocumentFormattingParams) -> Result<Option<Vec<TextEdit>>> {
+        let uri = &params.text_document.uri;
+        
+        // Get the document text
+        let file_path = uri.to_file_path().ok();
+        if file_path.is_none() {
+            return Ok(None);
+        }
+        
+        let text = match std::fs::read_to_string(file_path.unwrap()) {
+            Ok(t) => t,
+            Err(_) => return Ok(None),
+        };
+        
+        // Format the document
+        let formatted = Self::format_document(&text);
+        
+        if formatted == text {
+            // No changes needed
+            return Ok(None);
+        }
+        
+        // Calculate the range covering the entire document
+        let line_count = text.lines().count() as u32;
+        let last_line_len = text.lines().last().map(|l| l.len()).unwrap_or(0) as u32;
+        
+        Ok(Some(vec![TextEdit {
+            range: Range {
+                start: Position { line: 0, character: 0 },
+                end: Position { line: line_count.saturating_sub(1), character: last_line_len },
+            },
+            new_text: formatted,
+        }]))
+    }
+
     async fn diagnostic(
         &self,
         params: DocumentDiagnosticParams,
@@ -149,6 +186,264 @@ impl LanguageServer for KanataLanguageServer {
 }
 
 impl KanataLanguageServer {
+    fn format_document(text: &str) -> String {
+        // Parse defsrc layout
+        let defsrc_layout = match Self::parse_defsrc_layout(text) {
+            Some(layout) => layout,
+            None => return text.to_string(), // No defsrc found, no formatting
+        };
+        
+        // Apply layout to all deflayers
+        Self::apply_defsrc_layout_to_deflayers(text, &defsrc_layout)
+    }
+    
+    fn parse_defsrc_layout(text: &str) -> Option<Vec<Vec<usize>>> {
+        let lines: Vec<&str> = text.lines().collect();
+        let mut in_defsrc = false;
+        let mut defsrc_items: Vec<String> = Vec::new();
+        let mut paren_depth = 0;
+        
+        for line in lines {
+            let trimmed = line.trim();
+            
+            if trimmed.starts_with("(defsrc") {
+                in_defsrc = true;
+                paren_depth = 1;
+                // Extract content after (defsrc
+                let content = trimmed.trim_start_matches("(defsrc").trim();
+                if !content.is_empty() && !content.starts_with(')') {
+                    let mut current = String::new();
+                    for ch in content.chars() {
+                        if ch == '(' {
+                            paren_depth += 1;
+                        } else if ch == ')' {
+                            paren_depth -= 1;
+                            if paren_depth == 0 {
+                                if !current.trim().is_empty() {
+                                    defsrc_items.push(current.clone());
+                                }
+                                in_defsrc = false;
+                                break;
+                            }
+                        } else if ch.is_whitespace() && paren_depth == 1 {
+                            if !current.trim().is_empty() {
+                                defsrc_items.push(current.clone());
+                                current.clear();
+                            }
+                        } else {
+                            current.push(ch);
+                        }
+                    }
+                    if !current.trim().is_empty() && in_defsrc {
+                        defsrc_items.push(current);
+                    }
+                }
+                continue;
+            }
+            
+            if in_defsrc {
+                for ch in trimmed.chars() {
+                    if ch == '(' {
+                        paren_depth += 1;
+                    } else if ch == ')' {
+                        paren_depth -= 1;
+                        if paren_depth == 0 {
+                            in_defsrc = false;
+                            break;
+                        }
+                    }
+                }
+                
+                if in_defsrc && paren_depth == 1 {
+                    // Parse items from this line
+                    let mut current = String::new();
+                    for ch in trimmed.chars() {
+                        if ch == ')' {
+                            if !current.trim().is_empty() {
+                                defsrc_items.push(current.clone());
+                            }
+                            in_defsrc = false;
+                            break;
+                        } else if ch.is_whitespace() {
+                            if !current.trim().is_empty() {
+                                defsrc_items.push(current.clone());
+                                current.clear();
+                            }
+                        } else {
+                            current.push(ch);
+                        }
+                    }
+                    if !current.trim().is_empty() && in_defsrc {
+                        defsrc_items.push(current);
+                    }
+                }
+            }
+        }
+        
+        if defsrc_items.is_empty() {
+            return None;
+        }
+        
+        // Calculate layout (grapheme widths for each item)
+        let layout: Vec<Vec<usize>> = defsrc_items
+            .iter()
+            .map(|item| vec![item.graphemes(true).count()])
+            .collect();
+        
+        Some(layout)
+    }
+    
+    fn apply_defsrc_layout_to_deflayers(text: &str, layout: &[Vec<usize>]) -> String {
+        let lines: Vec<&str> = text.lines().collect();
+        let mut result = Vec::new();
+        let mut i = 0;
+        
+        while i < lines.len() {
+            let line = lines[i];
+            let trimmed = line.trim();
+            
+            if trimmed.starts_with("(deflayer") {
+                // Format this deflayer
+                let formatted_deflayer = Self::format_deflayer(&lines, i, layout);
+                result.push(formatted_deflayer.0);
+                i = formatted_deflayer.1;
+            } else {
+                result.push(line.to_string());
+                i += 1;
+            }
+        }
+        
+        result.join("\n")
+    }
+    
+    fn format_deflayer(lines: &[&str], start_idx: usize, layout: &[Vec<usize>]) -> (String, usize) {
+        let mut result = String::new();
+        let first_line = lines[start_idx];
+        let indent = first_line.len() - first_line.trim_start().len();
+        
+        // Extract layer name
+        let trimmed = first_line.trim();
+        let after_deflayer = trimmed.trim_start_matches("(deflayer").trim();
+        let layer_name = after_deflayer
+            .split_whitespace()
+            .next()
+            .unwrap_or("");
+        
+        result.push_str(&" ".repeat(indent));
+        result.push_str("(deflayer ");
+        result.push_str(layer_name);
+        
+        // Parse all items in this deflayer
+        let mut items = Vec::new();
+        let mut i = start_idx;
+        let mut in_deflayer = true;
+        let mut paren_depth = 1;
+        
+        // Skip past layer name on first line
+        let first_line_rest = after_deflayer.trim_start_matches(layer_name).trim();
+        let mut current = String::new();
+        
+        for ch in first_line_rest.chars() {
+            if ch == '(' {
+                paren_depth += 1;
+                current.push(ch);
+            } else if ch == ')' {
+                paren_depth -= 1;
+                if paren_depth == 0 {
+                    if !current.trim().is_empty() {
+                        items.push(current.clone());
+                    }
+                    in_deflayer = false;
+                    break;
+                } else {
+                    current.push(ch);
+                }
+            } else if ch.is_whitespace() && paren_depth == 1 {
+                if !current.trim().is_empty() {
+                    items.push(current.clone());
+                    current.clear();
+                }
+            } else {
+                current.push(ch);
+            }
+        }
+        
+        if !current.trim().is_empty() && in_deflayer {
+            items.push(current);
+        }
+        
+        // Continue parsing subsequent lines
+        i += 1;
+        while i < lines.len() && in_deflayer {
+            let line = lines[i].trim();
+            current = String::new();
+            
+            for ch in line.chars() {
+                if ch == '(' {
+                    paren_depth += 1;
+                    current.push(ch);
+                } else if ch == ')' {
+                    paren_depth -= 1;
+                    if paren_depth == 0 {
+                        if !current.trim().is_empty() {
+                            items.push(current.clone());
+                        }
+                        in_deflayer = false;
+                        break;
+                    } else {
+                        current.push(ch);
+                    }
+                } else if ch.is_whitespace() && paren_depth == 1 {
+                    if !current.trim().is_empty() {
+                        items.push(current.clone());
+                        current.clear();
+                    }
+                } else {
+                    current.push(ch);
+                }
+            }
+            
+            if !current.trim().is_empty() && in_deflayer {
+                items.push(current);
+            }
+            i += 1;
+        }
+        
+        // Only format if item count matches defsrc
+        if items.len() != layout.len() {
+            // Return original lines unchanged
+            let mut original = String::new();
+            for idx in start_idx..i {
+                if idx > start_idx {
+                    original.push('\n');
+                }
+                original.push_str(lines[idx]);
+            }
+            return (original, i);
+        }
+        
+        // Apply layout
+        for (idx, item) in items.iter().enumerate() {
+            let item_width = item.graphemes(true).count();
+            let target_width = layout[idx][0];
+            
+            result.push('\n');
+            result.push_str(&" ".repeat(indent + 2));
+            result.push_str(item);
+            
+            // Add padding if item is shorter than target
+            if item_width < target_width {
+                result.push_str(&" ".repeat(target_width - item_width));
+            }
+        }
+        
+        result.push('\n');
+        result.push_str(&" ".repeat(indent));
+        result.push(')');
+        
+        (result, i)
+    }
+    
     fn get_word_at_position(text: &str, position: Position) -> String {
         let lines: Vec<&str> = text.lines().collect();
         if position.line as usize >= lines.len() {
@@ -191,79 +486,136 @@ impl KanataLanguageServer {
         let mut aliases = HashMap::new();
         let mut layers = HashMap::new();
         
+        // Convert text to bytes with line/column tracking
         let lines: Vec<&str> = text.lines().collect();
         
-        for (line_num, line) in lines.iter().enumerate() {
-            let trimmed = line.trim();
+        for (line_idx, line) in lines.iter().enumerate() {
+            let trimmed = line.trim_start();
+            let indent = line.len() - trimmed.len();
             
-            // Look for defalias definitions: (defalias name ...)
+            // Check if this line starts with (defalias or (deflayer
             if trimmed.starts_with("(defalias") {
-                // Parse simple s-expression to extract alias names
-                let content = trimmed.trim_start_matches("(defalias").trim();
-                let mut depth = 0;
-                let mut current_word = String::new();
-                let mut in_string = false;
-                let mut is_first_word = true;
-                
-                for (_char_idx, c) in content.chars().enumerate() {
-                    match c {
-                        '"' => in_string = !in_string,
-                        '(' if !in_string => depth += 1,
-                        ')' if !in_string => {
-                            if depth > 0 {
-                                depth -= 1;
-                            } else {
-                                break;
-                            }
+                // Check if the name is on the same line
+                let after_keyword = trimmed.trim_start_matches("(defalias").trim_start();
+                if !after_keyword.is_empty() && !after_keyword.starts_with('(') && !after_keyword.starts_with(')') {
+                    // Name is on the same line
+                    let name_end = after_keyword.find(|c: char| c.is_whitespace() || c == '(' || c == ')')
+                        .unwrap_or(after_keyword.len());
+                    let alias_name = &after_keyword[..name_end];
+                    let name_col = indent + "(defalias".len() + (after_keyword.as_ptr() as usize - trimmed.trim_start_matches("(defalias").as_ptr() as usize);
+                    
+                    aliases.insert(alias_name.to_string(), Definition {
+                        uri: uri.clone(),
+                        range: Range {
+                            start: Position {
+                                line: line_idx as u32,
+                                character: name_col as u32,
+                            },
+                            end: Position {
+                                line: line_idx as u32,
+                                character: (name_col + alias_name.len()) as u32,
+                            },
+                        },
+                    });
+                } else {
+                    // Name might be on the next line(s)
+                    for (offset, next_line) in lines[(line_idx + 1)..].iter().enumerate() {
+                        let next_trimmed = next_line.trim_start();
+                        let next_indent = next_line.len() - next_trimmed.len();
+                        
+                        if next_trimmed.is_empty() || next_trimmed.starts_with(';') {
+                            continue;
                         }
-                        ' ' | '\t' | '\n' if !in_string && depth == 0 => {
-                            if !current_word.is_empty() && is_first_word {
-                                // This is an alias name
-                                let start_char = line.find(&current_word).unwrap_or(0);
-                                aliases.insert(current_word.clone(), Definition {
-                                    uri: uri.clone(),
-                                    range: Range {
-                                        start: Position {
-                                            line: line_num as u32,
-                                            character: start_char as u32,
-                                        },
-                                        end: Position {
-                                            line: line_num as u32,
-                                            character: (start_char + current_word.len()) as u32,
-                                        },
+                        
+                        if next_trimmed.starts_with(')') {
+                            break;
+                        }
+                        
+                        // This should be the alias name
+                        let name_end = next_trimmed.find(|c: char| c.is_whitespace() || c == '(' || c == ')')
+                            .unwrap_or(next_trimmed.len());
+                        let alias_name = &next_trimmed[..name_end];
+                        
+                        if !alias_name.is_empty() {
+                            let actual_line = line_idx + 1 + offset;
+                            
+                            aliases.insert(alias_name.to_string(), Definition {
+                                uri: uri.clone(),
+                                range: Range {
+                                    start: Position {
+                                        line: actual_line as u32,
+                                        character: next_indent as u32,
                                     },
-                                });
-                                is_first_word = false;
-                            }
-                            current_word.clear();
+                                    end: Position {
+                                        line: actual_line as u32,
+                                        character: (next_indent + alias_name.len()) as u32,
+                                    },
+                                },
+                            });
+                            break;
                         }
-                        _ if !in_string || depth == 0 => current_word.push(c),
-                        _ => {}
                     }
                 }
-            }
-            
-            // Look for deflayer definitions: (deflayer name ...)
-            if trimmed.starts_with("(deflayer") {
-                let content = trimmed.trim_start_matches("(deflayer").trim();
-                // Get first word as layer name
-                if let Some(end_idx) = content.find(|c: char| c.is_whitespace() || c == ')') {
-                    let layer_name = &content[..end_idx];
-                    if !layer_name.is_empty() {
-                        let start_char = line.find(layer_name).unwrap_or(0);
-                        layers.insert(layer_name.to_string(), Definition {
-                            uri: uri.clone(),
-                            range: Range {
-                                start: Position {
-                                    line: line_num as u32,
-                                    character: start_char as u32,
-                                },
-                                end: Position {
-                                    line: line_num as u32,
-                                    character: (start_char + layer_name.len()) as u32,
-                                },
+            } else if trimmed.starts_with("(deflayer") {
+                // Check if the name is on the same line
+                let after_keyword = trimmed.trim_start_matches("(deflayer").trim_start();
+                if !after_keyword.is_empty() && !after_keyword.starts_with('(') && !after_keyword.starts_with(')') {
+                    // Name is on the same line
+                    let name_end = after_keyword.find(|c: char| c.is_whitespace() || c == '(' || c == ')')
+                        .unwrap_or(after_keyword.len());
+                    let layer_name = &after_keyword[..name_end];
+                    let name_col = indent + "(deflayer".len() + (after_keyword.as_ptr() as usize - trimmed.trim_start_matches("(deflayer").as_ptr() as usize);
+                    
+                    layers.insert(layer_name.to_string(), Definition {
+                        uri: uri.clone(),
+                        range: Range {
+                            start: Position {
+                                line: line_idx as u32,
+                                character: name_col as u32,
                             },
-                        });
+                            end: Position {
+                                line: line_idx as u32,
+                                character: (name_col + layer_name.len()) as u32,
+                            },
+                        },
+                    });
+                } else {
+                    // Name might be on the next line(s)
+                    for (offset, next_line) in lines[(line_idx + 1)..].iter().enumerate() {
+                        let next_trimmed = next_line.trim_start();
+                        let next_indent = next_line.len() - next_trimmed.len();
+                        
+                        if next_trimmed.is_empty() || next_trimmed.starts_with(';') {
+                            continue;
+                        }
+                        
+                        if next_trimmed.starts_with(')') {
+                            break;
+                        }
+                        
+                        // This should be the layer name
+                        let name_end = next_trimmed.find(|c: char| c.is_whitespace() || c == '(' || c == ')')
+                            .unwrap_or(next_trimmed.len());
+                        let layer_name = &next_trimmed[..name_end];
+                        
+                        if !layer_name.is_empty() {
+                            let actual_line = line_idx + 1 + offset;
+                            
+                            layers.insert(layer_name.to_string(), Definition {
+                                uri: uri.clone(),
+                                range: Range {
+                                    start: Position {
+                                        line: actual_line as u32,
+                                        character: next_indent as u32,
+                                    },
+                                    end: Position {
+                                        line: actual_line as u32,
+                                        character: (next_indent + layer_name.len()) as u32,
+                                    },
+                                },
+                            });
+                            break;
+                        }
                     }
                 }
             }

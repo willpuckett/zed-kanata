@@ -15,6 +15,12 @@ A Zed editor extension that provides syntax highlighting for
   - Available for macOS (x86_64, ARM64), Linux (x86_64, ARM64), and Windows
     (x86_64, ARM64)
   - Powered by the official [kanata-parser](https://github.com/jtroo/kanata)
+- 🎯 **Go-to-definition** for aliases and layer names
+  - Jump to `defalias` definitions from `@alias` references
+  - Navigate to `deflayer` definitions from layer name references
+- ✨ **Auto-formatting** to align `deflayer` blocks according to `defsrc` layout
+  - Preserves the spatial keyboard layout from `defsrc`
+  - Automatically aligns all keys in deflayers for better readability
 
 ## 📦 Installation
 
@@ -117,10 +123,10 @@ MIT License
 
 - [ ] Publish to Zed extension registry
 - [x] Language server integration for diagnostics
-- [x] Completions and hover information
+- [x] Go-to-definition for aliases and layers
+- [x] Formatting support for aligning deflayer blocks
 - [ ] Code snippets for common Kanata patterns
-- [ ] Formatting support for aligning deflayer blocks
-- [ ] Go-to-definition for aliases and layers
+- [ ] Hover information for key codes and actions
 
 ---
 
