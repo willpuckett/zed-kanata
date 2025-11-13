@@ -76,7 +76,7 @@
     ret  e   @snn @bfun left up down right
 )
 
-(deflayer nn
+(deflayer nnrt
   • • • • • • • • • • • •
   • kprt kp7 kp8 kp9 • • vold mute volu • •
   •    kp0 kp4 kp5 kp6 • • • left down up right •

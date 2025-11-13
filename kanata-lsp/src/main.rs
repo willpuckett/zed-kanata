@@ -46,6 +46,9 @@ impl LanguageServer for KanataLanguageServer {
                     },
                 )),
                 definition_provider: Some(OneOf::Left(true)),
+                references_provider: Some(OneOf::Left(true)),
+                rename_provider: Some(OneOf::Left(true)),
+                implementation_provider: Some(ImplementationProviderCapability::Simple(true)),
                 document_formatting_provider: Some(OneOf::Left(true)),
                 ..ServerCapabilities::default()
             },
@@ -124,6 +127,178 @@ impl LanguageServer for KanataLanguageServer {
         }
         
         Ok(None)
+    }
+
+    async fn references(&self, params: ReferenceParams) -> Result<Option<Vec<Location>>> {
+        let uri = &params.text_document_position.text_document.uri;
+        let position = params.text_document_position.position;
+        
+        // Get the document text
+        let file_path = uri.to_file_path().ok();
+        if file_path.is_none() {
+            return Ok(None);
+        }
+        
+        let text = match std::fs::read_to_string(file_path.as_ref().unwrap()) {
+            Ok(t) => t,
+            Err(_) => return Ok(None),
+        };
+        
+        // Get the word at the cursor position
+        let word = Self::get_word_at_position(&text, position);
+        if word.is_empty() {
+            return Ok(None);
+        }
+        
+        // Determine if it's an alias or layer
+        let (search_word, is_alias) = if word.starts_with('@') {
+            (&word[1..], true)
+        } else {
+            (word.as_str(), false)
+        };
+        
+        let mut locations = Vec::new();
+        
+        // Search through all documents in the cache
+        let symbols = self.symbols_cache.read().await;
+        for (doc_uri, _doc_symbols) in symbols.iter() {
+            // Read the document to find references
+            if let Ok(doc_path) = doc_uri.to_file_path() {
+                if let Ok(doc_text) = std::fs::read_to_string(&doc_path) {
+                    let lines: Vec<&str> = doc_text.lines().collect();
+                    
+                    for (line_idx, line) in lines.iter().enumerate() {
+                        if is_alias {
+                            // Look for @word references
+                            let search_pattern = format!("@{}", search_word);
+                            let mut start = 0;
+                            while let Some(pos) = line[start..].find(&search_pattern) {
+                                let actual_pos = start + pos;
+                                locations.push(Location {
+                                    uri: doc_uri.clone(),
+                                    range: Range {
+                                        start: Position {
+                                            line: line_idx as u32,
+                                            character: actual_pos as u32,
+                                        },
+                                        end: Position {
+                                            line: line_idx as u32,
+                                            character: (actual_pos + search_pattern.len()) as u32,
+                                        },
+                                    },
+                                });
+                                start = actual_pos + 1;
+                            }
+                        } else {
+                            // Look for layer name references (without @)
+                            // This is trickier - we need to find word boundaries
+                            for (char_idx, _) in line.char_indices() {
+                                let remaining = &line[char_idx..];
+                                if remaining.starts_with(search_word) {
+                                    // Check if it's a word boundary
+                                    let before_ok = char_idx == 0 || !line.chars().nth(char_idx - 1).unwrap().is_alphanumeric();
+                                    let after_idx = char_idx + search_word.len();
+                                    let after_ok = after_idx >= line.len() || !line.chars().nth(after_idx).map(|c| c.is_alphanumeric()).unwrap_or(false);
+                                    
+                                    if before_ok && after_ok {
+                                        locations.push(Location {
+                                            uri: doc_uri.clone(),
+                                            range: Range {
+                                                start: Position {
+                                                    line: line_idx as u32,
+                                                    character: char_idx as u32,
+                                                },
+                                                end: Position {
+                                                    line: line_idx as u32,
+                                                    character: (char_idx + search_word.len()) as u32,
+                                                },
+                                            },
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        if locations.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(locations))
+        }
+    }
+
+    async fn rename(&self, params: RenameParams) -> Result<Option<WorkspaceEdit>> {
+        let uri = &params.text_document_position.text_document.uri;
+        let position = params.text_document_position.position;
+        let new_name = &params.new_name;
+        
+        // Get the document text
+        let file_path = uri.to_file_path().ok();
+        if file_path.is_none() {
+            return Ok(None);
+        }
+        
+        let text = match std::fs::read_to_string(file_path.as_ref().unwrap()) {
+            Ok(t) => t,
+            Err(_) => return Ok(None),
+        };
+        
+        // Get the word at the cursor position
+        let word = Self::get_word_at_position(&text, position);
+        if word.is_empty() {
+            return Ok(None);
+        }
+        
+        // Find all references to this symbol
+        let references_params = ReferenceParams {
+            text_document_position: params.text_document_position.clone(),
+            work_done_progress_params: WorkDoneProgressParams::default(),
+            partial_result_params: PartialResultParams::default(),
+            context: ReferenceContext {
+                include_declaration: true,
+            },
+        };
+        
+        let locations = match self.references(references_params).await? {
+            Some(locs) => locs,
+            None => return Ok(None),
+        };
+        
+        // Determine if we're renaming an alias (and need to add/remove @)
+        let is_alias = word.starts_with('@');
+        
+        // Create text edits for all references
+        let mut changes: HashMap<Url, Vec<TextEdit>> = HashMap::new();
+        
+        for location in locations {
+            let edit = TextEdit {
+                range: location.range,
+                new_text: if is_alias {
+                    format!("@{}", new_name)
+                } else {
+                    new_name.to_string()
+                },
+            };
+            
+            changes.entry(location.uri.clone())
+                .or_insert_with(Vec::new)
+                .push(edit);
+        }
+        
+        Ok(Some(WorkspaceEdit {
+            changes: Some(changes),
+            document_changes: None,
+            change_annotations: None,
+        }))
+    }
+
+    async fn goto_implementation(&self, params: GotoDefinitionParams) -> Result<Option<GotoDefinitionResponse>> {
+        // For Kanata, implementation is the same as definition
+        // (finding where aliases/layers are defined)
+        self.goto_definition(params).await
     }
 
     async fn formatting(&self, params: DocumentFormattingParams) -> Result<Option<Vec<TextEdit>>> {
@@ -703,9 +878,11 @@ impl KanataLanguageServer {
                         // Get the actual line length to avoid going past end of line
                         let end_col = if start_line == end_line {
                             // Single line diagnostic - highlight from start_col to end of line
-                            text.lines().nth(start_line as usize)
+                            let line_len = text.lines().nth(start_line as usize)
                                 .map(|line| line.len() as u32)
-                                .unwrap_or(start_col + 1)
+                                .unwrap_or(start_col + 1);
+                            // Ensure end_col is at least 1 character after start_col
+                            line_len.max(start_col + 1)
                         } else {
                             // Multi-line diagnostic - highlight to end of end_line
                             text.lines().nth(end_line as usize)
@@ -731,15 +908,30 @@ impl KanataLanguageServer {
                             format!("Extracted message: {}", display_message)
                         ).await;
                         
+                        // Ensure the range is valid
+                        let (final_start_line, final_start_col, final_end_line, final_end_col) = 
+                            if start_line > end_line || (start_line == end_line && start_col >= end_col) {
+                                // Invalid range, use a minimal valid range at start position
+                                (start_line, start_col, start_line, start_col + 1)
+                            } else {
+                                (start_line, start_col, end_line, end_col)
+                            };
+                        
+                        self.client.log_message(
+                            MessageType::INFO,
+                            format!("Diagnostic range: {}:{} to {}:{}", 
+                                final_start_line, final_start_col, final_end_line, final_end_col)
+                        ).await;
+                        
                         vec![Diagnostic {
                             range: Range {
                                 start: Position {
-                                    line: start_line,
-                                    character: start_col,
+                                    line: final_start_line,
+                                    character: final_start_col,
                                 },
                                 end: Position {
-                                    line: end_line,
-                                    character: end_col,
+                                    line: final_end_line,
+                                    character: final_end_col,
                                 },
                             },
                             severity: Some(DiagnosticSeverity::ERROR),
